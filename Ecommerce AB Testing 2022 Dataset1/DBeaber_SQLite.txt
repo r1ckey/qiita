@@ -1,5 +1,5 @@
 -- SQLiteでは記述が若干異なる、一つのチャンク毎にCtrl+Enterで実行。
---二つのテーブルをマージ
+-- 二つのテーブルをマージ
 
 CREATE TABLE ab_test_marged AS
 SELECT
