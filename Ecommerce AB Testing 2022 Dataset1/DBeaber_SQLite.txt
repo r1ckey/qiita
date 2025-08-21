@@ -1,0 +1,111 @@
+-- SQLiteでは記述が若干異なる、一つのチャンク毎にCtrl+Enterで実行。
+--二つのテーブルをマージ
+
+CREATE TABLE ab_test_marged AS
+SELECT
+    t1.user_id,
+    t1."timestamp",
+    t1."group",
+    t1.landing_page,
+    t1.converted,
+    t2.country
+FROM
+    ab_data AS t1
+INNER JOIN
+    countries AS t2
+ON
+    t1.user_id = t2.user_id;
+
+-- ステップ1: EDA
+
+-- データの最初の5行を確認します (Pandasの .head() に相当)
+SELECT * FROM ab_test_marged LIMIT 5;
+
+-- テーブルのスキーマ（カラム名、データ型など）を確認します (Pandasの .info() に相当)
+PRAGMA table_info(ab_test_marged);
+
+-- 各カラムの欠損値の数を確認します (Pandasの .isnull().sum() に相当)
+SELECT
+  SUM(CASE WHEN user_id IS NULL THEN 1 ELSE 0 END) AS null_count_user_id,
+  SUM(CASE WHEN "group" IS NULL THEN 1 ELSE 0 END) AS null_count_group,
+  SUM(CASE WHEN landing_page IS NULL THEN 1 ELSE 0 END) AS null_count_landing_page,
+  SUM(CASE WHEN converted IS NULL THEN 1 ELSE 0 END) AS null_count_converted,
+  SUM(CASE WHEN country IS NULL THEN 1 ELSE 0 END) AS null_count_country
+FROM
+  ab_test_marged;
+
+
+-- もし既存のテーブル `ab_test_preprocessed` があれば削除(検証用)
+DROP TABLE IF EXISTS ab_test_preprocessed;
+
+
+-- 空のテーブルを定義して作成する
+CREATE TABLE ab_test_preprocessed (
+    user_id INTEGER,
+    timestamp DATETIME,
+    "group" TEXT,
+    landing_page TEXT,
+    converted INTEGER,
+    country TEXT
+);
+
+-- 前処理したデータを、作成した空のテーブルに「挿入」する
+-- ab_test_marged から条件に合うデータだけを選び出しab_test_preprocessed テーブルに挿入
+
+INSERT INTO ab_test_preprocessed
+SELECT
+  user_id,
+  timestamp,
+  "group",
+  landing_page,
+  converted,
+  country
+FROM
+  ab_test_marged
+WHERE
+  -- 条件1: user_idが重複しているユーザーを除外
+  user_id NOT IN (
+    SELECT
+      user_id
+    FROM
+      ab_test_marged
+    GROUP BY
+      user_id
+    HAVING
+      COUNT(user_id) > 1
+  )
+  -- 条件2: グループとページの組み合わせが矛盾しているデータを除外
+  AND (
+    ("group" = 'treatment' AND landing_page = 'new_page') OR
+    ("group" = 'control' AND landing_page = 'old_page')
+  );
+
+-- 60時間表記だとTableauに読み込んだ際、時刻と日付がバグる。
+-- 調べながら修正方法を探る
+
+SELECT
+  -- 'YYYY-MM-DD HH:MM:SS' 形式に変換
+  strftime('%Y-%m-%d %H:%M:%S',
+    -- 固定の開始日から、秒数を元に日数を加算
+    '2022-08-01',
+    (
+      -- 日数と時間の計算
+      CAST(SUBSTR(timestamp, 1, 2) AS INTEGER) * 3600 +
+      CAST(SUBSTR(timestamp, 4, 2) AS INTEGER) * 60 +
+      CAST(SUBSTR(timestamp, 7, 2) AS INTEGER)
+    ) || ' seconds'
+  ) AS converted_datetime
+FROM ab_test_preprocessed;
+UPDATE ab_test_preprocessed
+SET timestamp = strftime('%Y-%m-%d %H:%M:%S',
+  '2022-08-01',
+  (
+    CAST(SUBSTR(timestamp, 1, 2) AS INTEGER) * 3600 +
+    CAST(SUBSTR(timestamp, 4, 2) AS INTEGER) * 60 +
+    CAST(SUBSTR(timestamp, 7, 2) AS INTEGER)
+  ) || ' seconds'
+);
+
+-- 最後に10行確認
+
+SELECT * FROM ab_test_preprocessed LIMIT 10;
